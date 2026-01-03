@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Distress Detection</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-light: #f4f7f9;
+            --bg-dark: #1a1a1a;
+            --card-light: #ffffff;
+            --card-dark: #2a2a2a;
+            --text-light: #111827;
+            --text-dark: #f0f0f0;
+            --border-light: #e5e7eb;
+            --border-dark: #404040;
+            --primary: #007bff;
+            --danger: #dc3545;
+            --success: #28a745;
+            --warning-glow: #ffc107;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            background-color: var(--bg-light);
+            color: var(--text-light);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        body.dark-mode {
+            --bg: var(--bg-dark);
+            --card: var(--card-dark);
+            --text: var(--text-dark);
+            --border: var(--border-dark);
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            grid-template-rows: auto 1fr;
+            gap: 20px;
+            width: 100%;
+            max-width: 1600px;
+            height: 92vh;
+        }
+
+        .card {
+            background-color: var(--card, var(--card-light));
+            color: var(--text, var(--text-light));
+            border: 1px solid var(--border, var(--border-light));
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+        }
+
+        #controls-container { grid-column: 1 / 2; grid-row: 1 / 2; }
+        #live-data { grid-column: 1 / 2; grid-row: 2 / 3; }
+        #map-container { grid-column: 2 / 3; grid-row: 1 / 3; border-radius: 12px; overflow: hidden; padding: 0; }
+        #map { width: 100%; height: 100%; }
+
+        h2 {
+            margin-top: 0;
+            border-bottom: 2px solid var(--border, var(--border-light));
+            padding-bottom: 10px;
+            font-weight: 500;
+        }
+
+        /* --- Dark Mode Toggle --- */
+        .theme-switch-wrapper { display: flex; align-items: center; margin-bottom: 15px; }
+        .theme-switch { display: inline-block; height: 26px; position: relative; width: 50px; }
+        .theme-switch input { display:none; }
+        .slider { background-color: #ccc; bottom: 0; cursor: pointer; left: 0; position: absolute; right: 0; top: 0; transition: .4s; border-radius: 26px; }
+        .slider:before { background-color: #fff; bottom: 3px; content: ""; height: 20px; left: 3px; position: absolute; transition: .4s; width: 20px; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--primary); }
+        input:checked + .slider:before { transform: translateX(24px); }
+        .theme-switch-wrapper span { margin-left: 10px; font-weight: 500; }
+
+        /* --- Control Button --- */
+        #toggle-btn {
+            width: 100%; padding: 15px; font-size: 1.2em; font-weight: bold; border: none;
+            border-radius: 8px; cursor: pointer; transition: all 0.3s ease;
+        }
+        .start-btn { background-color: var(--primary); color: white; }
+        .start-btn:hover { background-color: #0056b3; }
+        .stop-btn { background-color: var(--danger); color: white; }
+        .stop-btn:hover { background-color: #b21f2d; }
+
+        /* --- Status Box --- */
+        #status-box {
+            margin-top: 20px; padding: 12px; text-align: center; border-radius: 8px;
+            font-weight: 500; font-size: 1.1em; transition: all 0.3s ease;
+        }
+        .status-stopped { background-color: var(--border, var(--border-light)); color: var(--text, var(--text-light)); }
+        .status-listening { background-color: var(--success); color: white; }
+        .status-alert { background-color: var(--danger); color: white; animation: pulse 1.5s infinite; }
+
+        /* --- NEW: Audio Visualizer --- */
+        #visualizer-wrapper {
+            width: 100%;
+            height: 100px;
+            background-color: var(--border, var(--border-light));
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #visualizer-canvas { width: 100%; height: 100%; }
+
+        /* --- Progress Bar --- */
+        .progress-bar {
+            width: 100%; background-color: var(--border, var(--border-light)); border-radius: 8px;
+            overflow: hidden; margin-top: 8px;
+        }
+        .progress-bar-fill {
+            height: 24px; width: 0%;
+            background: linear-gradient(90deg, var(--primary) 0%, var(--warning-glow) 100%);
+            transition: width 0.1s linear;
+            text-align: center; color: white; line-height: 24px; font-weight: 500;
+        }
+        .progress-bar-fill.alerting {
+            background: var(--danger);
+        }
+
+        /* --- Event Log --- */
+        #event-log { flex-grow: 1; overflow-y: auto; margin-top: 10px; padding-right: 10px; }
+        .log-entry { padding: 8px; border-bottom: 1px solid var(--border, var(--border-light)); font-size: 0.9em; }
+        .log-alert { color: var(--danger); font-weight: bold; }
+
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card" id="controls-container">
+            <h2>System Control</h2>
+            <div class="theme-switch-wrapper">
+                <label class="theme-switch" for="checkbox">
+                    <input type="checkbox" id="checkbox" />
+                    <div class="slider"></div>
+                </label>
+                <span>Dark Mode</span>
+            </div>
+            <button id="toggle-btn" class="start-btn">Start Listening</button>
+            <div id="status-box" class="status-box status-stopped">Stopped</div>
+        </div>
+
+        <div class="card" id="live-data">
+            <h2>Live Analysis</h2>
+            <div id="visualizer-wrapper">
+                <canvas id="visualizer-canvas"></canvas>
+            </div>
+            <div style="margin-top: 20px;"><strong>Distress Confidence:</strong></div>
+            <div class="progress-bar"><div id="distress-progress" class="progress-bar-fill">0%</div></div>
+            <h3 style="margin-top: 20px; margin-bottom: 5px;">Event Log</h3>
+            <div id="event-log"></div>
+        </div>
+
+        <div class="card" id="map-container">
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- Initialization ---
+        const socket = io();
+        let isListening = false;
+        const toggleBtn = document.getElementById('toggle-btn');
+        const statusBox = document.getElementById('status-box');
+        const distressProgress = document.getElementById('distress-progress');
+        const eventLog = document.getElementById('event-log');
+        
+        // --- Map Setup ---
+        const map = L.map('map').setView([28.7041, 77.1025], 10);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+        let userMarker;
+
+        // --- Dark Mode Logic ---
+        const toggleSwitch = document.getElementById('checkbox');
+        toggleSwitch.addEventListener('change', () => {
+            document.body.classList.toggle('dark-mode');
+            localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
+        });
+        const currentTheme = localStorage.getItem('theme');
+        if (currentTheme === 'dark') {
+            document.body.classList.add('dark-mode');
+            toggleSwitch.checked = true;
+        }
+
+        // --- GPS and Location Sharing ---
+        navigator.geolocation.watchPosition(position => {
+            const { latitude, longitude } = position.coords;
+            socket.emit('update_location', { lat: latitude, lon: longitude });
+            if (!userMarker) {
+                userMarker = L.circle([latitude, longitude], { radius: 20, color: 'var(--primary)', weight: 3, fillOpacity: 0.2 }).addTo(map);
+                map.flyTo([latitude, longitude], 16);
+            } else { userMarker.setLatLng([latitude, longitude]); }
+        }, () => console.warn("Could not get GPS location."));
+
+        // --- NEW: Audio Visualizer Logic ---
+        const canvas = document.getElementById('visualizer-canvas');
+        const canvasCtx = canvas.getContext('2d');
+        let currentConfidence = 0;
+        let targetConfidence = 0;
+
+        function drawVisualizer() {
+            // Smoothly move current confidence towards the target
+            currentConfidence += (targetConfidence - currentConfidence) * 0.1;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            canvasCtx.clearRect(0, 0, width, height);
+
+            const isDark = document.body.classList.contains('dark-mode');
+            canvasCtx.fillStyle = isDark ? '#2a2a2a' : '#ffffff';
+            canvasCtx.fillRect(0, 0, width, height);
+
+            canvasCtx.lineWidth = 3;
+            canvasCtx.strokeStyle = `rgba(0, 123, 255, ${0.1 + currentConfidence * 0.9})`; // Opacity based on confidence
+
+            canvasCtx.beginPath();
+            const sliceWidth = width * 1.0 / 128;
+            let x = 0;
+
+            for (let i = 0; i < 128; i++) {
+                // Simulate a wave form reacting to confidence
+                const v = currentConfidence * (height / 2) * Math.sin(i * 0.2 + Date.now() * 0.01);
+                const y = (height / 2) + v;
+                if (i === 0) {
+                    canvasCtx.moveTo(x, y);
+                } else {
+                    canvasCtx.lineTo(x, y);
+                }
+                x += sliceWidth;
+            }
+            canvasCtx.lineTo(width, height / 2);
+            canvasCtx.stroke();
+            requestAnimationFrame(drawVisualizer);
+        }
+        drawVisualizer(); // Start the visualizer loop
+
+        // --- Control Logic ---
+        function addLogEntry(message, isAlert = false) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry' + (isAlert ? ' log-alert' : '');
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<strong>${time}:</strong> ${message}`;
+            eventLog.prepend(entry);
+        }
+
+        toggleBtn.addEventListener('click', () => {
+            isListening = !isListening;
+            if (isListening) {
+                socket.emit('start_listening');
+            } else {
+                socket.emit('stop_listening');
+            }
+        });
+
+        // --- WebSocket Event Handlers ---
+        socket.on('status', data => {
+            statusBox.textContent = data.message;
+            if (data.message === 'Listening...') {
+                toggleBtn.textContent = 'Stop Listening';
+                toggleBtn.className = 'stop-btn';
+                statusBox.className = 'status-box status-listening';
+            } else {
+                toggleBtn.textContent = 'Start Listening';
+                toggleBtn.className = 'start-btn';
+                statusBox.className = 'status-box status-stopped';
+            }
+            addLogEntry(`System status changed to: ${data.message}`);
+        });
+
+        socket.on('update_data', data => {
+            if (!isListening) return;
+            const distressConf = data.distress_confidence;
+            targetConfidence = distressConf; // Update target for visualizer
+            
+            const confPercent = (distressConf * 100).toFixed(1);
+            distressProgress.style.width = `${confPercent}%`;
+            distressProgress.textContent = `${confPercent}%`;
+            
+            if (distressConf > 0.7) {
+                distressProgress.classList.add('alerting');
+            } else {
+                distressProgress.classList.remove('alerting');
+            }
+        });
+
+        socket.on('distress_alert', data => {
+            const message = `ALERT: DISTRESS DETECTED!`;
+            statusBox.textContent = message;
+            statusBox.className = 'status-box status-alert';
+            addLogEntry(message, true);
+            const { lat, lon } = data.location;
+            map.flyTo([lat, lon], 17);
+            L.marker([lat, lon]).addTo(map)
+                .bindPopup(`<b>Distress Alert!</b><br>Confidence: ${(data.confidence*100).toFixed(1)}%`)
+                .openPopup();
+        });
+        
+        addLogEntry("Frontend initialized. Ready to connect.");
+    </script>
+</body>
+</html>

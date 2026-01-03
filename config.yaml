@@ -1,0 +1,6 @@
+
+audio:
+  sample_rate: 16000
+  chunk_duration: 2.0
+inference:
+  distress_threshold: 0.65
